@@ -2,6 +2,13 @@
 
 A Gradio-based web interface for the Chatterbox Text-to-Speech model, providing voice cloning capabilities and speech synthesis through an intuitive browser interface.
 
+## Screenshots
+![image](https://github.com/user-attachments/assets/bff94192-86de-458b-a6f9-93348d83c837) ![image](https://github.com/user-attachments/assets/90b589f1-c345-4c27-90b1-3863b6d4b6b3) ![image](https://github.com/user-attachments/assets/24857b44-3eff-4dbd-990b-e0f2c7c951e8)
+
+
+
+
+
 ## Overview
 
 Chattered enables users to generate high-quality synthetic speech using the Chatterbox TTS model. The application supports voice cloning from uploaded audio samples, automatic text processing for long content, and real-time speech generation with configurable parameters.
