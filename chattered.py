@@ -26,7 +26,6 @@ os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 
 orig_torch_load = torch.load
 def torch_load_conditional(*args, **kwargs):
-    # Wenn der Aufrufer nicht schon map_location gesetzt hat...
     if "map_location" not in kwargs:
         if torch.cuda.is_available():
             return orig_torch_load(*args, **kwargs)
@@ -109,7 +108,12 @@ class VoiceSampleManager:
             ):
                 audio_tensor = audio_tensor.T
 
-            # Save audio file
+            max_val = torch.max(torch.abs(audio_tensor))
+            if max_val > 0:
+                audio_tensor = (audio_tensor / max_val) * 0.6  # 60% Maximalpegel
+
+            # Clip to safe range before saving
+            audio_tensor = torch.clamp(audio_tensor, -1.0, 1.0)
             ta.save(str(filepath), audio_tensor, sample_rate)
             print(f"DEBUG: Voice sample saved to: {filepath}")
 
@@ -176,7 +180,14 @@ class ChatterboxGradioApp:
         self.model = None
         self.device = self.get_optimal_device()
         self.model_id = "ResembleAI/chatterbox"
-        self.cache_dir = Path.home() / ".cache" / "chatterbox"
+        hf_home = os.environ.get("HF_HOME")
+        if hf_home:
+            hf_home_path = Path(hf_home)
+            if not hf_home_path.is_absolute():
+                hf_home_path = Path(__file__).parent.resolve() / hf_home_path
+            self.cache_dir = hf_home_path / "hub" / "chatterbox"
+        else:
+            self.cache_dir = Path.home() / ".cache" / "chatterbox"
 
         # Store voice samples relative to script location, not cache
         script_dir = Path(__file__).parent if __file__ else Path.cwd()
