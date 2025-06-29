@@ -24,6 +24,22 @@ warnings.filterwarnings("ignore")
 # Enable CUDA debugging
 os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 
+orig_torch_load = torch.load
+def torch_load_conditional(*args, **kwargs):
+    # Wenn der Aufrufer nicht schon map_location gesetzt hat...
+    if "map_location" not in kwargs:
+        if torch.cuda.is_available():
+            return orig_torch_load(*args, **kwargs)
+        elif getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available():
+            kwargs["map_location"] = torch.device("mps")
+            print("Move model to mps")
+        else:
+            kwargs["map_location"] = torch.device("cpu")
+            print("Move model to cpu")
+
+    return orig_torch_load(*args, **kwargs)
+torch.load = torch_load_conditional
+
 try:
     from chatterbox.tts import ChatterboxTTS
 except ImportError:
@@ -186,19 +202,27 @@ class ChatterboxGradioApp:
 
     def get_optimal_device(self):
         """Determine the best device to use with proper CUDA checks"""
-        if not torch.cuda.is_available():
-            return "cpu"
-
-        try:
-            # Test CUDA functionality
-            test_tensor = torch.tensor([1.0]).cuda()
-            test_result = test_tensor * 2
-            del test_tensor, test_result
-            torch.cuda.empty_cache()
-            return "cuda"
-        except Exception as e:
-            print(f"CUDA test failed, falling back to CPU: {e}")
-            return "cpu"
+        if torch.cuda.is_available():
+            try:
+                # Test CUDA functionality
+                test_tensor = torch.tensor([1.0]).cuda()
+                _ = test_tensor * 2
+                del test_tensor
+                torch.cuda.empty_cache()
+                return "cuda"
+            except Exception as e:
+                print(f"CUDA test failed, falling back to MPS/CPU: {e}")
+        if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+            try:
+                # Test MPS functionality
+                test_tensor = torch.zeros(1, device="mps")
+                _ = test_tensor + 1
+                del test_tensor
+                return "mps"
+            except Exception as e:
+                print(f"MPS test failed, falling back to CPU: {e}")
+        
+        return "cpu"
 
     def sanitize_text(self, text):
         """Sanitize text to prevent tokenization issues"""
@@ -311,36 +335,65 @@ class ChatterboxGradioApp:
             except Exception as cuda_error:
                 print(f"CUDA generation failed: {cuda_error}")
 
-                # Strategy 2: Try moving model to CPU temporarily
-                try:
-                    print("Attempting CPU generation...")
-                    original_device = (
-                        self.model.device if hasattr(self.model, "device") else None
-                    )
+        # Strategy 2: Try with MPS (if available)
+        if self.device == "mps" or (self.device == "cuda" and 
+        getattr(torch.backends, "mps", None) and torch.backends.mps.is_available()):
+            try:
+                if self.device == "cuda":
+                    self.model.to("mps")
+                return self.model.generate(text, **kwargs)
+            except Exception as mps_error:
+                print(f"MPS generation failed: {mps_error}")
+        
+        # Strategy 3: Try moving model to CPU temporarily
+        try:
+            print("Attempting CPU generation...")
+            original_device = (
+                self.model.device if hasattr(self.model, "device") else None
+            )
 
-                    # Check if model has a method to move to CPU
+            if torch.cuda.is_available():
+                pass
+            elif getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+                if hasattr(self.model, "to"):
+                    self.model.to("mps")
+                else:
+                    self.model.cpu()
+            else:
+                # Check if model has a method to move to CPU
+                if hasattr(self.model, "cpu"):
+                    self.model.cpu()
+                else:
+                    self.model.to("cpu")
+
+            result = self.model.generate(text, **kwargs)
+
+            if original_device:
+                # Try to move back to CUDA if it was there before
+                if "cuda" in str(original_device) and torch.cuda.is_available():
+                    try:
+                        self.model.cuda()
+                    except:
+                        print("Could not move model back to CUDA, staying on", self.device)
+                        self.device = "cpu"
+                # Try to move back to MPS if it was there before
+                elif "mps" in str(original_device) and getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+                    try:
+                        self.model.to("mps")
+                    except:
+                        print("Could not move model back to MPS, staying on", self.device)
+                        self.device = "cpu"
+                else:
                     if hasattr(self.model, "cpu"):
                         self.model.cpu()
-                    elif hasattr(self.model, "to"):
-                        self.model.to("cpu")
+                    self.device = "cpu"
 
-                    result = self.model.generate(text, **kwargs)
+            return result
 
-                    # Try to move back to CUDA if it was there before
-                    if original_device and "cuda" in str(original_device):
-                        try:
-                            if hasattr(self.model, "cuda"):
-                                self.model.cuda()
-                            elif hasattr(self.model, "to"):
-                                self.model.to("cuda")
-                        except:
-                            print("Could not move model back to CUDA, staying on CPU")
-                            self.device = "cpu"
+        except Exception as cpu_error:
+            print(f"CPU generation also failed: {cpu_error}")
+            raise
 
-                    return result
-
-                except Exception as cpu_error:
-                    print(f"CPU generation also failed: {cpu_error}")
 
     def clear_cuda_cache(self):
         """Clear CUDA cache and run garbage collection"""
