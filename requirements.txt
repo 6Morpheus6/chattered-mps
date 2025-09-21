@@ -6,4 +6,4 @@ pathlib
 requests>=2.25.0
 huggingface-hub>=0.16.0
 tqdm>=4.62.0
-chatterbox-tts
+chatterbox-tts==0.1.2
